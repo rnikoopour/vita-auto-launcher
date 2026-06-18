@@ -8,12 +8,17 @@ Comes with a companion configurator app (VPK) for selecting the launcher from wi
 
 ### Plugin — `VitaAutoLauncher.suprx`
 
-Runs inside SceShell. Redirects to your chosen launcher:
+Runs inside SceShell and redirects to a configured app on boot and whenever you return to LiveArea.
 
-- On boot, when LiveArea would normally appear
-- When you close a game or homebrew and return to LiveArea
+**Scenario A — Boot into a launcher (e.g. RetroFlow)**
 
-The redirect fires after a brief delay (up to ~5 seconds) once the previous app has fully exited. This allows games launched from the custom launcher enough time to start before the plugin decides the user has returned to LiveArea.
+Set the configured app to a game launcher like RetroFlow. On boot the plugin opens RetroFlow instead of LiveArea. When you launch a game from RetroFlow and later exit it, the plugin redirects you back to RetroFlow. Pressing Home from within RetroFlow itself returns you to LiveArea normally — the redirect only fires when something launched *from* RetroFlow exits.
+
+**Scenario B — Boot directly into a game**
+
+Set the configured app to a specific game. The Vita boots straight into it. Exiting the game returns you to LiveArea (no redirect back in — pressing Home or quitting the configured app is treated as intentional).
+
+The redirect fires after a brief delay (up to ~5 seconds) to give the next app time to appear in the process list before the plugin decides nothing is launching.
 
 ### Configurator — `VALConfigurator.vpk`
 
