@@ -167,25 +167,34 @@ static int launcher_thread(SceSize args, void *argp) {
                         // launched by the custom launcher). Track the new app.
                         memcpy(fg_game, other, sizeof(fg_game));
                     } else {
-                        // Poll for up to 5 seconds for a newly-launched app to
-                        // appear in the process list before deciding to redirect.
-                        int found_new = 0;
-                        for (int i = 0; i < 10 && !found_new; i++) {
-                            sceKernelDelayThread(500000);
-                            other[0] = 0;
-                            fg_running = scan_running_apps(other);
-                            if (fg_running || other[0] != 0)
-                                found_new = 1;
-                        }
-
-                        if (found_new && !fg_running && other[0] != 0) {
-                            memcpy(fg_game, other, sizeof(fg_game));
-                        } else if (!found_new) {
-                            maybe_redirect();
+                        // If the app that just exited IS the configured launcher,
+                        // the user pressed Home or quit it intentionally — don't
+                        // redirect, just return to LiveArea.
+                        char configured[10] = {0};
+                        if (read_config(configured) && strcmp(fg_game, configured) == 0) {
                             state = STATE_LAUNCHER_ACTIVE;
                             fg_game[0] = 0;
+                        } else {
+                            // A game exited. Poll up to 5 seconds for a newly-launched
+                            // app to appear before deciding to redirect.
+                            int found_new = 0;
+                            for (int i = 0; i < 10 && !found_new; i++) {
+                                sceKernelDelayThread(500000);
+                                other[0] = 0;
+                                fg_running = scan_running_apps(other);
+                                if (fg_running || other[0] != 0)
+                                    found_new = 1;
+                            }
+
+                            if (found_new && !fg_running && other[0] != 0) {
+                                memcpy(fg_game, other, sizeof(fg_game));
+                            } else if (!found_new) {
+                                maybe_redirect();
+                                state = STATE_LAUNCHER_ACTIVE;
+                                fg_game[0] = 0;
+                            }
+                            // fg_running true: fg_game came back — stay in STATE_IN_GAME
                         }
-                        // fg_running true: fg_game came back — stay in STATE_IN_GAME
                     }
                 }
                 // fg_running true here: fg_game suspended (home pressed) — stay put
