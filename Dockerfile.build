@@ -1,0 +1,6 @@
+FROM vitasdk/vitasdk:latest
+
+RUN vdpm install vita2d
+RUN apk add --no-cache pngquant
+
+WORKDIR /build
