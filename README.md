@@ -18,7 +18,7 @@ Set the configured app to a game launcher like RetroFlow. On boot the plugin ope
 
 Set the configured app to a specific game. The Vita boots straight into it. Exiting the game returns you to LiveArea (no redirect back in — pressing Home or quitting the configured app is treated as intentional).
 
-The redirect fires after a brief delay (up to ~5 seconds) to give the next app time to appear in the process list before the plugin decides nothing is launching.
+The redirect fires as soon as the plugin confirms no other app is launching — typically instant when a launcher is involved, or within about a second otherwise.
 
 ### Configurator — `VALConfigurator.vpk`
 

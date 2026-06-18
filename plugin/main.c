@@ -18,8 +18,11 @@ typedef enum {
     STATE_IN_GAME,
 } State;
 
-static int  session_disabled = 0;
-static char fg_game[10]      = {0};
+static int    session_disabled = 0;
+static char   fg_game[10]      = {0};
+static SceUID fg_pid           = -1; // PID of tracked game; -1 when unknown
+static SceUID launcher_pid     = -1; // PID of configured launcher; -1 when unknown
+static int    livearea_stable  = 0;  // consecutive stable polls (fallback only)
 
 static uint32_t buttons_held(void) {
     SceCtrlData ctrl;
@@ -46,30 +49,38 @@ static int read_config(char *dst) {
     return 1;
 }
 
-// Scans the full running-app list (count=8 returns all, not just foreground).
-// Returns 1 if fg_game is present.
-// Sets other_out to the first non-NPXS app found that is NOT fg_game.
-static int scan_running_apps(char *other_out) {
-    if (other_out) other_out[0] = 0;
+// Returns 1 if fg_game's PID is still alive (process running or suspended).
+// Suspended apps retain their PID; terminated apps return an empty name.
+static int is_fg_game_alive(void) {
+    if (fg_pid < 0 || fg_game[0] == 0) return 0;
+    char name[16] = {0};
+    sceAppMgrGetNameById(fg_pid, name);
+    return (name[0] != 0 && strcmp(name, fg_game) == 0);
+}
+
+// Finds the first non-NPXS, non-fg_game app in the full process list.
+// Writes its name and PID to the out params.
+static void find_other_running(char *name_out, SceUID *pid_out) {
+    if (name_out) name_out[0] = 0;
+    if (pid_out)  *pid_out = -1;
 
     SceInt32 appIds[MAX_RUNNING] = {0};
     sceAppMgrGetRunningAppIdListForShell(appIds, MAX_RUNNING);
 
-    int fg_found = 0;
     for (int i = 0; i < MAX_RUNNING; i++) {
         if (appIds[i] == 0) break;
-        SceUID pid = sceAppMgrGetProcessIdByAppIdForShell(appIds[i]);
-        if (pid <= 0) continue;
+        SceUID p = sceAppMgrGetProcessIdByAppIdForShell(appIds[i]);
+        if (p <= 0) continue;
         char name[16] = {0};
-        sceAppMgrGetNameById(pid, name);
-
-        if (fg_game[0] && strcmp(name, fg_game) == 0) {
-            fg_found = 1;
-        } else if (strncmp(name, "NPXS", 4) != 0 && other_out && other_out[0] == 0) {
-            memcpy(other_out, name, 10);
+        sceAppMgrGetNameById(p, name);
+        if (name[0] == 0) continue;
+        if (strncmp(name, "NPXS", 4) == 0) continue;
+        if (fg_game[0] && strcmp(name, fg_game) == 0) continue;
+        if (name_out && name_out[0] == 0) {
+            memcpy(name_out, name, 10);
+            if (pid_out) *pid_out = p;
         }
     }
-    return fg_found;
 }
 
 // Checks whether a specific app name is anywhere in the full running list.
@@ -78,10 +89,10 @@ static int is_app_running(const char *name) {
     sceAppMgrGetRunningAppIdListForShell(appIds, MAX_RUNNING);
     for (int i = 0; i < MAX_RUNNING; i++) {
         if (appIds[i] == 0) break;
-        SceUID pid = sceAppMgrGetProcessIdByAppIdForShell(appIds[i]);
-        if (pid <= 0) continue;
+        SceUID p = sceAppMgrGetProcessIdByAppIdForShell(appIds[i]);
+        if (p <= 0) continue;
         char n[16] = {0};
-        sceAppMgrGetNameById(pid, n);
+        sceAppMgrGetNameById(p, n);
         if (strcmp(n, name) == 0) return 1;
     }
     return 0;
@@ -125,6 +136,7 @@ static int launcher_thread(SceSize args, void *argp) {
             if (state == STATE_INIT)
                 continue;
             strcpy(appName, LIVEAREA_BUDDY);
+            pid = -1;
         } else {
             pid = sceAppMgrGetProcessIdByAppIdForShell(appId);
             if (pid <= 0)
@@ -143,8 +155,16 @@ static int launcher_thread(SceSize args, void *argp) {
 
         case STATE_LAUNCHER_ACTIVE:
             if (strcmp(appName, LIVEAREA_BUDDY) != 0 && strncmp(appName, "NPXS", 4) != 0) {
+                // While the launcher is in the foreground, record its PID so we
+                // can detect it later as a suspended process after a game exits.
+                if (launcher_pid < 0) {
+                    char configured[10] = {0};
+                    if (read_config(configured) && strcmp(appName, configured) == 0)
+                        launcher_pid = pid;
+                }
                 if (is_app_running(appName)) {
                     memcpy(fg_game, appName, sizeof(fg_game));
+                    fg_pid = pid;
                     state = STATE_IN_GAME;
                 }
             }
@@ -152,55 +172,76 @@ static int launcher_thread(SceSize args, void *argp) {
 
         case STATE_IN_GAME: {
             if (strcmp(appName, fg_game) == 0) {
-                // fg_game is still the foreground app — nothing to do.
+                // fg_game is still the foreground app — reset stability counter.
+                livearea_stable = 0;
                 break;
             }
             if (strcmp(appName, LIVEAREA_BUDDY) == 0) {
-                // LiveArea is foreground. Use the full process list to check
-                // whether fg_game actually exited or is just suspended.
+                if (is_fg_game_alive()) {
+                    // fg_game's process is still alive — the user pressed Home
+                    // but hasn't closed the app. Don't redirect.
+                    livearea_stable = 0;
+                    break;
+                }
+
+                // fg_game's process is gone.
+                char configured[10] = {0};
+                int have_config = read_config(configured);
+
+                // Was the exited app the configured launcher itself?
+                // User intentionally quit it — return to LAUNCHER_ACTIVE, no redirect.
+                if (have_config && strcmp(fg_game, configured) == 0) {
+                    livearea_stable = 0;
+                    launcher_pid = -1;
+                    state = STATE_LAUNCHER_ACTIVE;
+                    fg_game[0] = 0;
+                    fg_pid = -1;
+                    break;
+                }
+
+                // Is the configured launcher still alive (suspended)?
+                // Suspended processes retain their PID and return a name via
+                // GetNameById. If it's alive it will resume — no redirect needed.
+                if (launcher_pid >= 0) {
+                    char lname[16] = {0};
+                    sceAppMgrGetNameById(launcher_pid, lname);
+                    if (have_config && lname[0] != 0 && strcmp(lname, configured) == 0) {
+                        livearea_stable = 0;
+                        state = STATE_LAUNCHER_ACTIVE;
+                        fg_game[0] = 0;
+                        fg_pid = -1;
+                        break;
+                    }
+                    launcher_pid = -1; // stale — launcher is gone
+                }
+
+                // Check if another app is already in the process list
+                // (e.g. the launcher immediately started the next game).
                 char other[10] = {0};
-                int fg_running = scan_running_apps(other);
+                SceUID other_pid = -1;
+                find_other_running(other, &other_pid);
 
-                if (!fg_running) {
-                    if (other[0] != 0) {
-                        // fg_game exited but another app launched (e.g. a game
-                        // launched by the custom launcher). Track the new app.
-                        memcpy(fg_game, other, sizeof(fg_game));
-                    } else {
-                        // If the app that just exited IS the configured launcher,
-                        // the user pressed Home or quit it intentionally — don't
-                        // redirect, just return to LiveArea.
-                        char configured[10] = {0};
-                        if (read_config(configured) && strcmp(fg_game, configured) == 0) {
-                            state = STATE_LAUNCHER_ACTIVE;
-                            fg_game[0] = 0;
-                        } else {
-                            // A game exited. Poll up to 5 seconds for a newly-launched
-                            // app to appear before deciding to redirect.
-                            int found_new = 0;
-                            for (int i = 0; i < 10 && !found_new; i++) {
-                                sceKernelDelayThread(500000);
-                                other[0] = 0;
-                                fg_running = scan_running_apps(other);
-                                if (fg_running || other[0] != 0)
-                                    found_new = 1;
-                            }
-
-                            if (found_new && !fg_running && other[0] != 0) {
-                                memcpy(fg_game, other, sizeof(fg_game));
-                            } else if (!found_new) {
-                                maybe_redirect();
-                                state = STATE_LAUNCHER_ACTIVE;
-                                fg_game[0] = 0;
-                            }
-                            // fg_running true: fg_game came back — stay in STATE_IN_GAME
-                        }
+                if (other[0] != 0) {
+                    livearea_stable = 0;
+                    memcpy(fg_game, other, sizeof(fg_game));
+                    fg_pid = other_pid;
+                } else {
+                    // Fallback: wait briefly before redirecting in case a launch
+                    // is in flight but not yet visible in the process list.
+                    livearea_stable++;
+                    if (livearea_stable >= 5) { // 5 × 200ms = 1 second
+                        livearea_stable = 0;
+                        maybe_redirect();
+                        state = STATE_LAUNCHER_ACTIVE;
+                        fg_game[0] = 0;
+                        fg_pid = -1;
                     }
                 }
-                // fg_running true here: fg_game suspended (home pressed) — stay put
             } else if (strncmp(appName, "NPXS", 4) != 0) {
-                // A different non-system app is now foreground. Track it.
+                // A different non-system app is now foreground — track it.
+                livearea_stable = 0;
                 memcpy(fg_game, appName, sizeof(fg_game));
+                fg_pid = pid;
             }
             break;
         }
