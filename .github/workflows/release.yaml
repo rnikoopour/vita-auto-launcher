@@ -1,0 +1,30 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: vitasdk/vitasdk:latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          vdpm install vita2d
+          apk add --no-cache pngquant cmake make
+
+      - name: Build
+        run: cmake -Bbuild -DCMAKE_BUILD_TYPE=Release && cmake --build build -j4
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build/plugin/VitaAutoLauncher.suprx
+            build/configurator/VALConfigurator.vpk
