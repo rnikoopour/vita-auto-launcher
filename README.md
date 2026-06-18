@@ -26,18 +26,15 @@ A vita2d app for configuring the plugin without editing files.
 | Triangle | Toggle plugin enabled/disabled (persists across reboots) |
 | X | Exit |
 
-The header turns red when the plugin is disabled.
-
 ## Bypasses
 
-Hold one of these at the moment a redirect would fire:
+| Input | Scope | How to trigger |
+|-------|-------|----------------|
+| SELECT | Skip the next redirect only — resumes normally after | Hold SELECT while booting or exiting a game |
+| L + R | Disable all redirects until the next reboot | Hold L + R while booting or exiting a game |
+| Triangle in configurator | Disable persistently across reboots | Toggle in the configurator (header turns red when active) |
 
-| Input | Effect |
-|-------|--------|
-| SELECT | Skip this one redirect |
-| L + R | Disable all redirects for the current session |
-
-To disable persistently across reboots: use Triangle in the configurator, or create the file `ux0:/data/VitaAutoLauncher/disabled`.
+You can also create `ux0:/data/VitaAutoLauncher/disabled` manually to persistently disable without opening the configurator.
 
 ## Installation
 
